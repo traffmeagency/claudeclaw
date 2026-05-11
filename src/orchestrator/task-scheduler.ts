@@ -2,12 +2,13 @@ import { ChildProcess } from 'child_process';
 import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
 
-import { ASSISTANT_NAME, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
+import { ASSISTANT_NAME, DEFAULT_RUNTIME, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
 import {
   ContainerOutput,
   runContainerAgent,
   writeTasksSnapshot,
 } from '../runtimes/container-runner.js';
+import { runSandboxAgent } from '../runtimes/sandbox-runner.js';
 import {
   getAllTasks,
   getDueTasks,
@@ -169,7 +170,9 @@ async function runTask(
   };
 
   try {
-    const output = await runContainerAgent(
+    const runtime = group.runtime || DEFAULT_RUNTIME;
+    const runAgent = runtime === 'sandbox' ? runSandboxAgent : runContainerAgent;
+    const output = await runAgent(
       group,
       {
         prompt: task.prompt,
