@@ -232,7 +232,7 @@ async function processGroupMessages(chatJid: string, router: MessageRouter): Pro
         { group: group.name },
         'Idle timeout, closing container stdin',
       );
-      queue.closeStdin(replyJid);
+      queue.closeStdin(queueJid);
     }, IDLE_TIMEOUT);
   };
 
@@ -251,6 +251,12 @@ async function processGroupMessages(chatJid: string, router: MessageRouter): Pro
   const isChannelJid = !chatJid.includes(':', chatJid.indexOf(':') + 1);
   let replyJid = chatJid;
   let agentGroup = group;
+  // The GroupQueue marks this run active under the jid it was dispatched with
+  // (`chatJid`). Agent-process registration and stdin-close MUST use that same
+  // jid, or `closeStdin`/`sendMessage` become no-ops and the warm container
+  // deadlocks the group until the 10-min stale timeout. `replyJid` may differ
+  // (a Telegram forum topic), but that's only for outbound routing.
+  const queueJid = chatJid;
   if (tgThreadId) {
     // Telegram forum topic — encode thread in reply JID, no extra group registration needed
     replyJid = `${chatJid}:t${tgThreadId}`;
@@ -281,6 +287,7 @@ async function processGroupMessages(chatJid: string, router: MessageRouter): Pro
     agentGroup,
     prompt,
     replyJid,
+    queueJid,
     async (result) => {
       // Streaming output callback — called for each agent result
       if (result.result) {
@@ -372,6 +379,11 @@ async function runAgent(
   group: RegisteredGroup,
   prompt: string,
   chatJid: string,
+  // Jid the GroupQueue tracks this run under. Usually equals `chatJid`, but may
+  // differ when the reply goes to a sub-thread (e.g. a Telegram forum topic):
+  // the queue's active/process state lives under the dispatch jid, so the agent
+  // process must be registered there too — otherwise closeStdin/sendMessage no-op.
+  queueJid: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
 ): Promise<RunAgentResult> {
   const isMain = group.isMain === true;
@@ -432,7 +444,7 @@ async function runAgent(
       agentConfig: group.agentConfig,
     };
     const onProcessCb = (proc: any, name: string) =>
-      queue.registerProcess(chatJid, proc, name, group.folder);
+      queue.registerProcess(queueJid, proc, name, group.folder);
 
     const output =
       runtime === 'sandbox'
