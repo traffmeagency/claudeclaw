@@ -85,6 +85,7 @@ const WORKSPACE_EXTRA   = process.env.CLAUDECLAW_EXTRA_DIR   || '/workspace/extr
 const IPC_INPUT_DIR = path.join(WORKSPACE_IPC, 'input');
 const IPC_INPUT_CLOSE_SENTINEL = path.join(IPC_INPUT_DIR, '_close');
 const IPC_POLL_MS = 500;
+const processedIpcFiles = new Set<string>();
 
 /**
  * Push-based async iterable for streaming user messages to the SDK.
@@ -375,7 +376,7 @@ function drainIpcInput(): string[] {
   try {
     fs.mkdirSync(IPC_INPUT_DIR, { recursive: true });
     const files = fs.readdirSync(IPC_INPUT_DIR)
-      .filter(f => f.endsWith('.json'))
+      .filter(f => f.endsWith('.json') && !processedIpcFiles.has(f))
       .sort();
 
     const messages: string[] = [];
@@ -383,13 +384,13 @@ function drainIpcInput(): string[] {
       const filePath = path.join(IPC_INPUT_DIR, file);
       try {
         const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-        fs.unlinkSync(filePath);
+        processedIpcFiles.add(file);
         if (data.type === 'message' && data.text) {
           messages.push(data.text);
         }
+        try { fs.unlinkSync(filePath); } catch { /* ignore — sandbox may lack delete permission */ }
       } catch (err) {
         log(`Failed to process input file ${file}: ${err instanceof Error ? err.message : String(err)}`);
-        try { fs.unlinkSync(filePath); } catch { /* ignore */ }
       }
     }
     return messages;
@@ -438,7 +439,11 @@ async function runQuery(
   const stream = new MessageStream();
   stream.push(prompt);
 
-  // Poll IPC for follow-up messages and _close sentinel during the query
+  // Poll for _close sentinel during the query.
+  // IPC messages are NOT piped mid-query — they are collected by waitForIpcMessage
+  // after the query ends and handled as a new query turn. This prevents a race
+  // where the same IPC file is processed both as the initial prompt and as a
+  // piped message, which causes duplicate responses.
   let ipcPolling = true;
   let closedDuringQuery = false;
   const pollIpcDuringQuery = () => {
@@ -449,11 +454,6 @@ async function runQuery(
       stream.end();
       ipcPolling = false;
       return;
-    }
-    const messages = drainIpcInput();
-    for (const text of messages) {
-      log(`Piping IPC message into active query (${text.length} chars)`);
-      stream.push(text);
     }
     setTimeout(pollIpcDuringQuery, IPC_POLL_MS);
   };
@@ -626,6 +626,12 @@ async function runQuery(
         },
         turns,
       });
+      // End the prompt stream so the SDK exits the for-await loop.
+      // Without this, the AsyncIterable prompt keeps the query open forever
+      // waiting for additional user messages, blocking the main loop from
+      // moving on to waitForIpcMessage() and processing the next IPC turn.
+      stream.end();
+      ipcPolling = false;
     }
   }
 
@@ -651,7 +657,6 @@ async function main(): Promise<void> {
   try {
     const stdinData = await readStdin();
     containerInput = JSON.parse(stdinData);
-    try { fs.unlinkSync('/tmp/input.json'); } catch { /* may not exist */ }
     log(`Received input for group: ${containerInput.groupFolder}`);
   } catch (err) {
     writeOutput({
@@ -692,7 +697,20 @@ async function main(): Promise<void> {
     while (true) {
       log(`Starting query (session: ${sessionId || 'new'}, resumeAt: ${resumeAt || 'latest'})...`);
 
-      const queryResult = await runQuery(prompt, sessionId, mcpServerPath, containerInput, sdkEnv, resumeAt);
+      let queryResult;
+      try {
+        queryResult = await runQuery(prompt, sessionId, mcpServerPath, containerInput, sdkEnv, resumeAt);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (sessionId && msg.includes('No conversation found')) {
+          log(`Stale session ${sessionId}, retrying with fresh session`);
+          sessionId = undefined;
+          resumeAt = undefined;
+          continue;
+        }
+        throw err;
+      }
+
       if (queryResult.newSessionId) {
         sessionId = queryResult.newSessionId;
       }

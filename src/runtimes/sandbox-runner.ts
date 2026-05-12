@@ -205,6 +205,14 @@ function buildSandboxMounts(
     containerPath: '/workspace/ipc',
     readonly: false,
   });
+  // srt allowWrite is not recursive — explicitly mount each writable subdir
+  for (const sub of ['input', 'messages', 'tasks']) {
+    mounts.push({
+      hostPath: path.join(groupIpcDir, sub),
+      containerPath: `/workspace/ipc/${sub}`,
+      readonly: false,
+    });
+  }
 
   // Per-group Claude sessions directory
   const groupSessionsDir = path.join(
@@ -246,7 +254,16 @@ function buildSandboxMounts(
     }
   }
 
-  // Sandbox needs Claude home dir to be accessible
+  // Sandbox needs Claude home dir to be accessible.
+  // Also expose the parent dir (HOME) so Claude Code can write session data
+  // without hitting allowWrite restrictions on the parent path.
+  const groupHomeDir = path.dirname(groupSessionsDir);
+  fs.mkdirSync(groupHomeDir, { recursive: true });
+  mounts.push({
+    hostPath: groupHomeDir,
+    containerPath: '/home/node',
+    readonly: false,
+  });
   mounts.push({
     hostPath: groupSessionsDir,
     containerPath: '/home/node/.claude',
@@ -300,7 +317,8 @@ export function buildSandboxSettings(
       denyWrite.push(mount.hostPath);
     } else if (mount.readonly) {
       allowRead.push(mount.hostPath);
-      denyWrite.push(mount.hostPath); // enforce read-only at srt level
+      // Don't add to denyWrite — a parent denyWrite overrides child allowWrite in srt,
+      // so absence from allowWrite is sufficient to block writes on read-only mounts.
     } else {
       // read-write
       allowWrite.push(mount.hostPath);
@@ -397,6 +415,7 @@ export async function runSandboxAgent(
 
   const logsDir = path.join(groupDir, 'logs');
   fs.mkdirSync(logsDir, { recursive: true });
+  fs.mkdirSync(path.join(groupDir, 'memory', 'topics'), { recursive: true });
 
   return new Promise((resolve) => {
     // Map container paths to host paths via env vars
@@ -412,6 +431,10 @@ export async function runSandboxAgent(
         pathEnv.CLAUDECLAW_GLOBAL_DIR = mount.hostPath;
       else if (mount.containerPath?.startsWith('/workspace/extra'))
         pathEnv.CLAUDECLAW_EXTRA_DIR = mount.hostPath;
+      else if (mount.containerPath === '/home/node/.claude')
+        // Point HOME at the parent of .claude so Claude Code reads/writes
+        // its session data to this group's isolated directory, not ~/.claude/
+        pathEnv.HOME = path.dirname(mount.hostPath);
     }
 
     // Sandbox: real credentials + restricted network (no proxy needed)

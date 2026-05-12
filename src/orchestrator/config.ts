@@ -11,6 +11,7 @@ const envConfig = readEnvFile([
   'ASSISTANT_NAME',
   'ASSISTANT_HAS_OWN_NUMBER',
   'RUNTIME',
+  'TELEGRAM_BOT_POOL',
 ]);
 
 export const ASSISTANT_NAME =
@@ -88,6 +89,15 @@ export const TRIGGER_PATTERN = new RegExp(
 const webhookEnv = readEnvFile(['WEBHOOK_PORT', 'WEBHOOK_SECRET']);
 export const WEBHOOK_PORT = parseInt(process.env.WEBHOOK_PORT || webhookEnv.WEBHOOK_PORT || '3100', 10);
 export const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || webhookEnv.WEBHOOK_SECRET || '';
+
+export const TELEGRAM_BOT_POOL = (
+  process.env.TELEGRAM_BOT_POOL ||
+  envConfig.TELEGRAM_BOT_POOL ||
+  ''
+)
+  .split(',')
+  .map((t) => t.trim())
+  .filter(Boolean);
 
 // Runtime selection: 'container' (default, Apple Container / Docker) or 'sandbox' (srt)
 export const DEFAULT_RUNTIME: 'container' | 'sandbox' =

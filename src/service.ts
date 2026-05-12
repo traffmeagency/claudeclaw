@@ -10,11 +10,18 @@
  * lives in cwd. Multiple instances = multiple directories.
  */
 import { loadExtensions } from './orchestrator/extension-loader.js';
+import { TELEGRAM_BOT_POOL } from './orchestrator/config.js';
 
 async function start(): Promise<void> {
   // Load built-in channels (self-registering on import)
   // Slack, Telegram, WhatsApp are now installable extensions
   await import('./channels/index.js');
+
+  // Initialize Telegram bot pool for agent swarm if configured
+  if (TELEGRAM_BOT_POOL.length > 0) {
+    const { initBotPool } = await import('./channels/telegram.js');
+    await initBotPool(TELEGRAM_BOT_POOL);
+  }
 
   // Load built-in extensions (always present in core)
   await import('./cost-tracking/index.js');

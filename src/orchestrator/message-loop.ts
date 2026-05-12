@@ -242,10 +242,19 @@ async function processGroupMessages(chatJid: string, router: MessageRouter): Pro
   const triggerMsg = missedMessages.find((m) =>
     TRIGGER_PATTERN.test(m.content.trim()),
   );
+
+  // If messages came from a Telegram forum topic, reply to that same topic thread.
+  const tgThreadId = chatJid.startsWith('tg:')
+    ? missedMessages.find((m) => m.thread_id)?.thread_id
+    : undefined;
+
   const isChannelJid = !chatJid.includes(':', chatJid.indexOf(':') + 1);
   let replyJid = chatJid;
   let agentGroup = group;
-  if (isChannelJid && triggerMsg && group.requiresTrigger !== false) {
+  if (tgThreadId) {
+    // Telegram forum topic — encode thread in reply JID, no extra group registration needed
+    replyJid = `${chatJid}:t${tgThreadId}`;
+  } else if (isChannelJid && triggerMsg && group.requiresTrigger !== false) {
     const threadJid = `${chatJid}:${triggerMsg.id}`;
     const threadFolder = `${group.folder}_thread_${triggerMsg.id.replace('.', '_')}`;
     // Register the thread so follow-up replies route here without trigger
