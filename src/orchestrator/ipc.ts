@@ -80,19 +80,22 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   isMain ||
                   (targetGroup && targetGroup.folder === sourceGroup)
                 ) {
+                  let delivered = false;
                   if (
                     data.sender &&
                     data.chatJid.startsWith('tg:') &&
                     TELEGRAM_BOT_POOL.length > 0
                   ) {
                     const { sendPoolMessage } = await import('../channels/telegram.js');
-                    await sendPoolMessage(
+                    delivered = await sendPoolMessage(
                       data.chatJid,
                       data.text,
                       data.sender,
                       sourceGroup,
                     );
-                  } else {
+                  }
+                  // No sender, no pool, or pool exhausted → deliver via the main bot
+                  if (!delivered) {
                     await deps.router.route({
                       chatJid: data.chatJid,
                       text: data.text,

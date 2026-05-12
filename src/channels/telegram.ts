@@ -135,15 +135,22 @@ export async function initBotPool(tokens: string[]): Promise<void> {
   }
 }
 
+/**
+ * Send a message from a sender-specific pool bot.
+ * Returns `true` if it was actually delivered via a pool bot, `false` if it
+ * couldn't be (no pool configured / no free bot left / send error) — the caller
+ * must then fall back to the main bot. (This used to return void and silently
+ * drop the message when the pool was exhausted, which lost swarm output.)
+ */
 export async function sendPoolMessage(
   chatId: string,
   text: string,
   sender: string,
   groupFolder: string,
-): Promise<void> {
+): Promise<boolean> {
   if (poolApis.length === 0) {
-    logger.warn({ sender }, 'No pool bots available, falling back to main bot');
-    return;
+    logger.warn({ sender }, 'No pool bots available — caller should use the main bot');
+    return false;
   }
 
   const key = `${groupFolder}:${sender}`;
@@ -156,12 +163,12 @@ export async function sendPoolMessage(
       .find(i => !usedIndices.has(i));
 
     if (freeIdx === undefined) {
-      // All pool bots taken — send from main bot instead of stealing
+      // All pool bots taken — caller falls back to the main bot rather than stealing
       logger.warn(
         { sender, groupFolder, poolSize: poolApis.length },
-        'All pool bots assigned to other senders — falling back to main bot',
+        'All pool bots assigned to other senders — caller should use the main bot',
       );
-      return;
+      return false;
     }
 
     idx = freeIdx;
@@ -190,8 +197,10 @@ export async function sendPoolMessage(
       }
     }
     logger.info({ chatId, sender, poolIndex: idx, length: text.length }, 'Pool message sent');
+    return true;
   } catch (err) {
     logger.error({ chatId, sender, err }, 'Failed to send pool message');
+    return false;
   }
 }
 
