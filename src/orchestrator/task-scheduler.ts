@@ -23,6 +23,17 @@ import { logger } from './logger.js';
 import { MessageRouter, RegisteredGroup, ScheduledTask } from './types.js';
 
 /**
+ * Sentinel a scheduled task can emit as its final output to indicate it has
+ * nothing to report this run. When the agent's result is exactly this token
+ * (ignoring surrounding whitespace/punctuation) the result is NOT forwarded to
+ * the channel — useful for background monitors that should stay silent.
+ */
+function isSilentTaskResult(result: string | null | undefined): boolean {
+  if (!result) return true;
+  return result.trim().replace(/^[.\s"'`*]+|[.\s"'`*]+$/g, '').toUpperCase() === 'NO_OUTPUT';
+}
+
+/**
  * Compute the next run time for a recurring task, anchored to the
  * task's scheduled time rather than Date.now() to prevent cumulative
  * drift on interval-based tasks.
@@ -188,13 +199,18 @@ async function runTask(
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {
           result = streamedOutput.result;
-          // Forward result to user via outbound router
-          await deps.router.route({
-            chatJid: task.chat_jid,
-            text: streamedOutput.result,
-            triggerType: 'task-result',
-            groupFolder: task.group_folder,
-          });
+          // Forward result to user via outbound router — unless the task
+          // signalled it has nothing to report. Background/monitor tasks emit
+          // the sentinel "NO_OUTPUT" so they can run silently without spamming
+          // the channel with the agent's "nothing changed" acknowledgement.
+          if (!isSilentTaskResult(streamedOutput.result)) {
+            await deps.router.route({
+              chatJid: task.chat_jid,
+              text: streamedOutput.result,
+              triggerType: 'task-result',
+              groupFolder: task.group_folder,
+            });
+          }
           scheduleClose();
         }
         if (streamedOutput.status === 'success') {
