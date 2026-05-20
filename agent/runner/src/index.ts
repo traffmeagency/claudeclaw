@@ -19,6 +19,9 @@ import path from 'path';
 import { query, HookCallback, PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 interface AgentConfig {
   model?: string;
   effort?: 'low' | 'medium' | 'high';
@@ -548,6 +551,21 @@ async function runQuery(
           CLAUDECLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
         },
       },
+      // better-notion-mcp — available when NOTION_TOKEN or NOTION_API_KEY is set in .env
+      ...(process.env.NOTION_TOKEN || process.env.NOTION_API_KEY
+        ? {
+            'better-notion-mcp': {
+              command: 'node',
+              args: [
+                path.join(__dirname, '../../../mcp-servers/node_modules/@n24q02m/better-notion-mcp/bin/cli.mjs'),
+              ],
+              env: {
+                // Package uses NOTION_TOKEN; fall back to NOTION_API_KEY if that's what's in .env
+                NOTION_TOKEN: process.env.NOTION_TOKEN ?? process.env.NOTION_API_KEY ?? '',
+              },
+            },
+          }
+        : {}),
     },
     hooks: {
       PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
@@ -671,7 +689,6 @@ async function main(): Promise<void> {
   // No real secrets exist in the container environment.
   const sdkEnv: Record<string, string | undefined> = { ...process.env };
 
-  const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const mcpServerPath = path.join(__dirname, 'ipc-mcp-stdio.js');
 
   let sessionId = containerInput.sessionId;
